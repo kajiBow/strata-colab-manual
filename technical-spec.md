@@ -88,3 +88,7 @@
 - Uncensored: `alesha-pro/Qwen3.8-Flash-Next-abliterated-GSQ-RCO-Strata-GGUF`
 - 同種の先行実装 collabosm（延命設計の参考）: https://github.com/architectds/collabosm
 - Colab FAQ: https://research.google.com/colaboratory/faq.html
+
+---
+
+*著者: KJ618 / 共同著者: Muse*
