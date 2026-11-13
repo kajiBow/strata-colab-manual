@@ -10,9 +10,21 @@
 
 ## 環境の前提
 
-- `google-colab-cli`（コマンド名 `colab`）が導入済みで、Google AI Pro アカウントで OAuth 認証済みであること。
+### 実行環境
+- シェル実行とファイル操作ができ、数時間にわたってバックグラウンドプロセス（監督プロセス）を維持できるエージェント環境であること。
+- `google-colab-cli`（コマンド名 `colab`）が導入済みで、Google AI Pro アカウントで OAuth 認証済みであること。未導入の場合は下記「前提の揃え方」で揃える。
 - **colab コマンドは必ず全てのプロキシ環境変数を外して実行する**こと（`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy`）。プロキシ経由だと割り当てリクエストが 411 エラーで失敗します。
-- 認証トークン（keyring）は対話的な実行文脈でのみ有効です。setsid/nohup で切り離したループでは期限切れ後に認証プロンプトが出て死ぬため、取得リトライは必ず自分のプロセスツリー内で回してください。
+- 認証トークン（keyring）は対話的な実行文脈でのみ有効です。setsid/nohup で切り離したループでは期限切れ後に認証プロンプトが出て死ぬため、取得リトライや監督プロセスは必ず自分のプロセスツリー内で回してください。
+
+### 前提の揃え方（未導入の場合）
+1. **CLI の導入**: venv を作って入れる（v0.8.0 で実績あり）。以後 `colab` はこの venv のものを PATH に通して使う。
+   `python3 -m venv ~/colab-cli-venv && ~/colab-cli-venv/bin/pip install google-colab-cli`
+2. **OAuth 認証**: 初回の `colab` 実行時に認証用 URL とコード入力待ちが表示される。**この手順はユーザーの操作が必須**です。URL をユーザーに提示し、Google AI Pro のアカウントでサインインして表示される認証コードを貼ってもらってください。トークンは keyring に保存されます。通ったら `colab sessions` がプロンプトなしで実行できることを確認する。
+3. **残高と既存割り当ての確認（取得の前に必ず）**: `colab usage` でコンピュートユニットの残高が十分にあること（A100 は約6.73/時を消費。残高0では A100 は取れない）、`colab sessions` で既存の割り当てが残っていないことを確認する。残っていたら先に `colab stop -s <name>` で解放する（二重消費の防止）。
+
+### VM 内の長時間処理の回し方（共通の型）
+- setup やダウンロード等の長時間処理は `colab exec` で直接実行しない。VM 内で `subprocess.Popen(..., start_new_session=True)` によりデタッチド起動し、出力はログファイルへ、完了時にはラッパースクリプトが終了コードをログ末尾へ書くようにする（例: `SETUP_EXIT=0`）。setup 自身は完了マーカーを出しません。
+- 進捗確認は短い `colab exec` でログ末尾を読むポーリングで行う。
 
 ## パラメータ
 
@@ -29,12 +41,12 @@
 ## 手順
 
 ### 1. A100 取得
-`colab new -s <name> --gpu A100` を約20秒間隔で最大10回試行する（1試行は約9分でタイムアウト）。取得できたら GPU 名と RAM を確認する（A100-SXM4-40GB / RAM 83GB が目安）。
+まず前提節の事前確認（`colab usage` の残高と `colab sessions` の既存割り当て）を済ませる。そのうえで `colab new -s <name> --gpu A100` を約20秒間隔で最大10回試行する（1試行は約9分でタイムアウト）。取得できたら GPU 名と RAM を確認する（A100-SXM4-40GB / RAM 83GB が目安）。
 
 ### 2. 構築
 Colab VM 上で:
-1. `https://github.com/Niko1221/Strata.git` を `/content/Strata` に clone し、`uv` を導入する。
-2. setup を VM 内でデタッチド実行し、ログで完了マーカーを確認する（約20分）:
+1. `https://github.com/Niko1221/Strata.git` を `/content/Strata` に clone し、`uv` を導入する（無ければ `curl -LsSf https://astral.sh/uv/install.sh | sh` で入れ、PATH を通す）。
+2. setup を共通の型でデタッチド実行し、ログ末尾の `SETUP_EXIT=0` を確認する（約20分）:
    `STRATA_UV=1 bash setup.sh --setup --yes --backend cuda --cuda 13 --gpu 0 --family qwen --model IQ3_S --context 32768 --vision no --data-dir /content/Strata-data --host 127.0.0.1 --port 8081 --no-browser --no-start`
    （GGUF のダウンロードと SHA 照合は setup 自身が行う）
 
@@ -46,7 +58,7 @@ Colab VM 上で:
 
 ### 4. 起動と公開
 1. サーバーを VM 内デタッチドで起動する（`bash run-iq3_s.sh`、ログは `/content/server.log`）。
-2. `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8081` を VM 内デタッチドで起動し、`*.trycloudflare.com` の URL を取得する。
+2. cloudflared が VM に無ければ、公式リリース（https://github.com/cloudflare/cloudflared/releases）の `cloudflared-linux-amd64` バイナリを取得して PATH の通った場所に置く。そのうえで `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8081` を VM 内デタッチドで起動し、`*.trycloudflare.com` の URL を取得する。
 3. `/health` が `loaded: true`、`max_context: 262144` を返し、サーバーログに `thinking level: high` が出るまで待つ（読み込み約4分）。
 
 ### 5. 検証（キープアライブ開始前に必ず済ませる）
@@ -54,6 +66,7 @@ Colab VM 自身からトンネル経由ではなくローカルで:
 - `GET /health` → 200
 - API キーなし POST `/v1/chat/completions` → 401
 - API キーあり POST → 200 で実応答が返る
+- 検証リクエストの注意: `reasoning_effort: "none"` を付けるか `max_tokens` を十分に（4096 目安）取ること。思考 high のままだと小さい `max_tokens` では思考だけで枠を食い、本文が空（content=None）で返ることがある（サーバーの異常ではない）
 
 ### 6. キープアライブ（最重要）
 Colab はカーネルの実行活動が無いセッションを回収します。次の設計でカーネルを「実行中」に保ち続けてください:
