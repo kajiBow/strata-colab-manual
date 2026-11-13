@@ -52,10 +52,15 @@
    - `Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf`（28.80GB）
    - リポジトリ内パスは `IQ3_S/` プレフィックス付き。ファイル名は公式 ISTA 版と同一形式。
    - `curl -L -C - --retry 5` でレジューム可能にすること。
-3. リポジトリの `IQ3_S/` フォルダに同梱の `SHA256SUMS` で両シャードの照合を行い、OK を確認する。
-4. setup を共通の型でデタッチド実行する（`--gguf-dir` にダウンロード先フォルダを指定。それ以外の引数は通常版と同じ）:
-   `STRATA_UV=1 bash setup.sh --setup --yes --backend cuda --cuda 13 --gpu 0 --family qwen --model IQ3_S --context 32768 --vision no --data-dir /content/Strata-data --host 127.0.0.1 --port 8081 --no-browser --no-start --gguf-dir <フォルダ>`
+3. ダウンロードした両シャードの SHA256 を照合する。このリポジトリには `SHA256SUMS` は同梱されていないので、Hugging Face の tree API（`https://huggingface.co/api/models/alesha-pro/Qwen3.8-Flash-Next-abliterated-GSQ-RCO-Strata-GGUF/tree/main/IQ3_S`）が返す各ファイルの `lfs.oid`（＝公式 SHA256）と、ローカルで計算した `sha256sum` を突き合わせて OK を確認する。
+4. setup を共通の型でデタッチド実行する（`--gguf-dir` にダウンロード先フォルダを指定し、**必ず `--experimental-speed-projection on` を付ける**。それ以外の引数は通常版と同じ）:
+   `STRATA_UV=1 bash setup.sh --setup --yes --backend cuda --cuda 13 --gpu 0 --family qwen --model IQ3_S --context 32768 --vision no --data-dir /content/Strata-data --host 127.0.0.1 --port 8081 --no-browser --no-start --gguf-dir <フォルダ> --experimental-speed-projection on`
 5. ログ末尾の `SETUP_EXIT=0` を確認する。
+
+**【最重要】無検閲化はモデルの重みではなく Strata の設定で行う（2026-11-13 実測で踏んだミス）**:
+このリポジトリの GGUF の重みは公式 ISTA 版とバイト単位で同一です。「abliterated」の実体は、Strata 本体に同梱された 480KB の拒否方向ベクトル（`data/experimental-speed-projection/Qwen3.8-Flash-Next-experimental-speed-projection.gguf`）を、推論時に残差ストリームから差し引く **experimental speed projection** 機能です。これは**デフォルト OFF** で、setup で有効化しないとモデルは公式版とまったく同じ定型拒否を返します（health チェックや通常の応答では判別できません）。
+- setup 時に `--experimental-speed-projection on` を付けると、設定ファイルにエンジンフラグ（`--control-vector-scaled <ベクトルのパス>:1.0 --control-vector-layer-range 4 44 --cvec-mode project --cvec-dir per-layer`）が書き込まれます。
+- 有効化の確認は起動ログの `control vector mode = project, dir = per-layer, layers 4..44 (41 steered)` の行で行う。
 
 予備ルート（未検証）: `jimmy31chen/RVN-Qwen3.8-Flash-Next-Abliterated-Uncensored-IQ3_S-Strata`（単一 GGUF + 構築済みパック）。
 
@@ -66,6 +71,7 @@
 - `api_key` に API キー（値はコンソール・チャット・ログに**絶対に出力しない**。ファイル間でのみ受け渡し、一時ファイルは shred する）
 - `reasoning_effort` = `"high"`
 - `args` の `--max-context` = `262144`
+- **無検閲化（experimental speed projection）が有効なこと**: setup の `--experimental-speed-projection on` が設定ファイルに反映され、`args` に `--cvec-mode project` 等のフラグ群が入っていること（ステップ2の【最重要】参照）
 
 ### 4. 起動と公開
 1. サーバーを VM 内デタッチドで起動する（`bash run-iq3_s.sh`、ログは `/content/server.log`）。
